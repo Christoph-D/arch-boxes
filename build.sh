@@ -5,7 +5,7 @@
 # errexit: "Exit immediately if [...] command exits with a non-zero status."
 set -o nounset -o errexit
 shopt -s extglob
-readonly DEFAULT_DISK_SIZE="2G"
+readonly DEFAULT_DISK_SIZE="3G"
 readonly IMAGE="image.img"
 # shellcheck disable=SC2016
 readonly MIRROR='https://geo.mirror.pkgbuild.com/$repo/os/$arch'
@@ -57,8 +57,8 @@ function setup_disk() {
   # Partscan is racy
   wait_until_settled "${LOOPDEV}"
   mkfs.fat -F 32 -S 4096 "${LOOPDEV}p2"
-  mkfs.btrfs "${LOOPDEV}p3"
-  mount -o compress-force=zstd "${LOOPDEV}p3" "${MOUNT}"
+  mkfs.ext4 "${LOOPDEV}p3"
+  mount "${LOOPDEV}p3" "${MOUNT}"
   mount --mkdir "${LOOPDEV}p2" "${MOUNT}/efi"
 }
 
@@ -77,7 +77,7 @@ EOF
   echo "Server = ${MIRROR}" >mirrorlist
 
   # We use the hosts package cache
-  pacstrap -c -C pacman.conf -K -M "${MOUNT}" base linux grub openssh sudo btrfs-progs dosfstools efibootmgr
+  pacstrap -c -C pacman.conf -K -M "${MOUNT}" base linux grub openssh sudo dosfstools efibootmgr
   cp mirrorlist "${MOUNT}/etc/pacman.d/"
 }
 
@@ -95,7 +95,7 @@ function image_cleanup() {
   # So for the initial install we use the fallback initramfs, and
   # "autodetect" should add the relevant modules to the initramfs when
   # the user updates the kernel.
-  cp --reflink=always -a "${MOUNT}/boot/"{initramfs-linux-fallback.img,initramfs-linux.img}
+  cp -a "${MOUNT}/boot/"{initramfs-linux-fallback.img,initramfs-linux.img}
 
   sync -f "${MOUNT}/etc/os-release"
   fstrim --verbose "${MOUNT}"
@@ -118,7 +118,7 @@ function mount_image() {
   LOOPDEV=$(losetup --find --partscan --show "${1:-${IMAGE}}")
   # Partscan is racy
   wait_until_settled "${LOOPDEV}"
-  mount -o compress-force=zstd "${LOOPDEV}p3" "${MOUNT}"
+  mount "${LOOPDEV}p3" "${MOUNT}"
   # Setup bind mount to package cache
   mount --bind "/var/cache/pacman/pkg" "${MOUNT}/var/cache/pacman/pkg"
 }
@@ -153,12 +153,9 @@ function create_image() {
     sgdisk --align-end --move-second-header \
       --new 0:0:0 --typecode=0:8304 --change-name=0:'Arch Linux root' \
       "${tmp_image}"
+    resize2fs -f "${tmp_image}"
   fi
   mount_image "${tmp_image}"
-  if [ -n "${DISK_SIZE}" ]; then
-    btrfs filesystem resize max "${MOUNT}"
-  fi
-
   if [ 0 -lt "${#PACKAGES[@]}" ]; then
     arch-chroot "${MOUNT}" /usr/bin/pacman -S --noconfirm "${PACKAGES[@]}"
   fi
